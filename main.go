@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	
 	"github.com/coreos/etcd/etcdserver/stats"
 	"github.com/coreos/etcd/pkg/types"
@@ -14,14 +17,11 @@ import (
 	"github.com/coreos/etcd/rafthttp"
 )
 
-const (
-	raftId = 0x01
-)
-
 type raftNode struct {
 	id			int
+	peers       []string
 	
-	storage 	*raft.MemoryStorage
+	storage     *raft.MemoryStorage
 	node        raft.Node
 }
 func (rc *raftNode) Process(ctx context.Context, m raftpb.Message) error {
@@ -32,7 +32,13 @@ func (rc *raftNode) ReportUnreachable(id uint64)                          {}
 func (rc *raftNode) ReportSnapshot(id uint64, status raft.SnapshotStatus) {}
 
 func main(){
-	var rc *raftNode = &raftNode{id: raftId}
+	id := flag.Int("id", 1, "node ID")
+	cluster := flag.String("cluster", "http://127.0.0.1:12380,http://127.0.0.1:22380,http://127.0.0.1:32380", 
+		"comma separated cluster peers")
+	flag.Parse()
+	
+	var rc *raftNode = &raftNode{id: *id}
+	rc.peers = strings.Split(*cluster, ",")
 	rc.storage = raft.NewMemoryStorage()
 	c := &raft.Config{
 		ID:				uint64(rc.id),
@@ -53,6 +59,14 @@ func main(){
 		LeaderStats: stats.NewLeaderStats(strconv.Itoa(rc.id)),
 		ErrorC:      make(chan error),
 	}
+	transport.Start()
+	for i := range rc.peers {
+		if i+1 != rc.id {
+			transport.AddPeer(types.ID(i+1), []string{rc.peers[i]})
+		}
+	}
+	
+	url, _ := url.Parse(rc.peers[rc.id-1])
 	mux := transport.Handler()
-	log.Fatal(http.ListenAndServe("127.0.0.1:12380", mux))
+	log.Fatal(http.ListenAndServe(url.Host, mux))
 }
