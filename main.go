@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 	
 	"github.com/coreos/etcd/etcdserver/stats"
 	"github.com/coreos/etcd/pkg/types"
@@ -23,6 +24,7 @@ type raftNode struct {
 	
 	storage     *raft.MemoryStorage
 	node        raft.Node
+	transport   *rafthttp.Transport
 }
 func (rc *raftNode) Process(ctx context.Context, m raftpb.Message) error {
 	return rc.node.Step(ctx, m)
@@ -30,6 +32,24 @@ func (rc *raftNode) Process(ctx context.Context, m raftpb.Message) error {
 func (rc *raftNode) IsIDRemoved(id uint64) bool                           { return false }
 func (rc *raftNode) ReportUnreachable(id uint64)                          {}
 func (rc *raftNode) ReportSnapshot(id uint64, status raft.SnapshotStatus) {}
+
+func (rc *raftNode) ServeEndpoint(){
+	url, _ := url.Parse(rc.peers[rc.id - 1])
+	mux := rc.transport.Handler()
+	log.Fatal(http.ListenAndServe(url.Host, mux))
+}
+
+func (rc *raftNode) ServeChannels(){
+	for {
+		select {
+			case rd := <-rc.node.Ready():
+				fmt.Printf("receive node ready: %+v", rd)
+				rc.storage.Append(rd.Entries)
+				rc.transport.Send(rd.Messages)
+				rc.node.Advance()
+		}
+	}
+}
 
 func main(){
 	id := flag.Int("id", 1, "node ID")
@@ -48,10 +68,24 @@ func main(){
 		MaxSizePerMsg:	4096,
 		MaxInflightMsgs:256,
 	}
-	rc.node = raft.StartNode(c, []raft.Peer{{ID: 0x02}, {ID: 0x03}})
+	rpeers := make([]raft.Peer, len(rc.peers))
+	for i, _ := range rc.peers{
+		rpeers[i] = raft.Peer{ID: uint64(i+1)}
+	}
+	rc.node = raft.StartNode(c, rpeers)
 	fmt.Printf("node: %+v", rc.node)
 	
-	transport := &rafthttp.Transport{
+	ticker := time.NewTicker(100 * time.Millisecond)
+	go func(){
+		for {
+			select{
+				case <-ticker.C:
+					rc.node.Tick()
+			}
+		}
+	}()
+	
+	rc.transport = &rafthttp.Transport{
 		ID:          types.ID(rc.id),
 		ClusterID:   0x1000,
 		Raft:        rc,
@@ -59,14 +93,17 @@ func main(){
 		LeaderStats: stats.NewLeaderStats(strconv.Itoa(rc.id)),
 		ErrorC:      make(chan error),
 	}
-	transport.Start()
+	rc.transport.Start()
 	for i := range rc.peers {
 		if i+1 != rc.id {
-			transport.AddPeer(types.ID(i+1), []string{rc.peers[i]})
+			rc.transport.AddPeer(types.ID(i+1), []string{rc.peers[i]})
 		}
 	}
 	
-	url, _ := url.Parse(rc.peers[rc.id-1])
-	mux := transport.Handler()
-	log.Fatal(http.ListenAndServe(url.Host, mux))
+	go rc.ServeEndpoint()
+	go rc.ServeChannels()
+	
+	if err, ok := <-rc.transport.ErrorC; ok {
+		log.Fatal(err)
+	}
 }
