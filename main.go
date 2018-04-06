@@ -84,6 +84,7 @@ func main(){
 		for {
 			select{
 				case <-ticker.C:
+					fmt.Printf("node.Tick Status %+v\n", rc.node.Status())
 					rc.node.Tick()
 			}
 		}
