@@ -6,14 +6,17 @@ import (
 	"log"
 	"net/url"
 	"net/http"
-	"time"
+	"os"
 	"strconv"
 	"strings"
+	"time"
+
 	
 	"github.com/coreos/etcd/etcdserver/stats"
 	"github.com/coreos/etcd/pkg/types"	
 	"github.com/coreos/etcd/raft"
     "github.com/coreos/etcd/raft/raftpb"
+    "github.com/coreos/etcd/raftsnap"
 	"github.com/coreos/etcd/rafthttp"
 )
 
@@ -21,9 +24,13 @@ type raftNode struct {
 	id			int
 	peers       []string
 	
-	storage     *raft.MemoryStorage
 	node        raft.Node
+	storage     *raft.MemoryStorage
 	transport   *rafthttp.Transport
+	snapshotter *raftsnap.Snapshotter
+	
+	snapdir     string
+	waldir      string
 }
 func (rc *raftNode) Process(ctx context.Context, m raftpb.Message) error {
 	return rc.node.Step(ctx, m)
@@ -61,9 +68,21 @@ func (rc *raftNode) ServeChannels(){
 }
 
 func CreateRaftNode(id *int, cluster *string){
-	var rc *raftNode = &raftNode{id: *id}
+	var rc *raftNode = &raftNode{
+		id:          	*id,
+		snapdir: 	    fmt.Sprintf("snap-%d", *id),
+	}
+	
 	rc.peers = strings.Split(*cluster, ",")
 	rc.storage = raft.NewMemoryStorage()
+	
+	if !Exists(rc.snapdir) {
+		err := os.Mkdir(rc.snapdir, 0755)
+		if err != nil {
+			panic(fmt.Sprintf("Mkdir %s failed. Error: %v", rc.snapdir, err))
+		}
+	}
+	rc.snapshotter = raftsnap.New(rc.snapdir)
 	c := &raft.Config{
 		ID:				uint64(rc.id),
 		ElectionTick:	10,
