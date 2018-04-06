@@ -43,7 +43,11 @@ func (rc *raftNode) ServeChannels(){
 	for {
 		select {
 			case rd := <-rc.node.Ready():
-				fmt.Printf("receive node ready: %+v", rd)
+				fmt.Printf("***receive node ready msg***\n")
+				for i, msg := range rd.Messages {
+					fmt.Printf("(%d)[%v][%d] %d -> %d\n", 
+					i, msg.Type, msg.Term, msg.From, msg.To)
+				}
 				rc.storage.Append(rd.Entries)
 				rc.transport.Send(rd.Messages)
 				rc.node.Advance()
