@@ -18,6 +18,8 @@ import (
     "github.com/coreos/etcd/raft/raftpb"
     "github.com/coreos/etcd/raftsnap"
 	"github.com/coreos/etcd/rafthttp"
+	"github.com/coreos/etcd/wal"
+	"github.com/coreos/etcd/wal/walpb"
 )
 
 type raftNode struct {
@@ -26,11 +28,16 @@ type raftNode struct {
 	
 	node        raft.Node
 	storage     *raft.MemoryStorage
-	transport   *rafthttp.Transport
 	snapshotter *raftsnap.Snapshotter
+	transport   *rafthttp.Transport
+	wal         *wal.WAL
 	
 	snapdir     string
 	waldir      string
+	
+	lastIndex   uint64
+	
+	CommitC     chan *string
 }
 func (rc *raftNode) Process(ctx context.Context, m raftpb.Message) error {
 	return rc.node.Step(ctx, m)
@@ -71,6 +78,9 @@ func CreateRaftNode(id *int, cluster *string){
 	var rc *raftNode = &raftNode{
 		id:          	*id,
 		snapdir: 	    fmt.Sprintf("snap-%d", *id),
+		waldir:         fmt.Sprintf("wal-%d", *id),
+		
+		CommitC:        make(chan *string),
 	}
 	
 	rc.peers = strings.Split(*cluster, ",")
@@ -83,6 +93,44 @@ func CreateRaftNode(id *int, cluster *string){
 		}
 	}
 	rc.snapshotter = raftsnap.New(rc.snapdir)
+	
+	oldwal := wal.Exist(rc.waldir)
+	if !oldwal {
+		if err := os.Mkdir(rc.waldir, 0755); err != nil {
+			log.Fatalf("Mkdir %s failed. Error: %v", rc.waldir, err)
+		}
+		w, err := wal.Create(rc.waldir, nil)
+		if err != nil {
+			log.Fatal("Create wal failed. Error: %v", err)
+		}
+		w.Close()
+	}
+	snap, err := rc.snapshotter.Load()
+	if err != nil && err != raftsnap.ErrNoSnapshot {
+		log.Fatalf("load snapshot failed, %v", err)
+	}
+	walsnap := walpb.Snapshot{}
+	if snap != nil {
+		walsnap.Index, walsnap.Term = snap.Metadata.Index, snap.Metadata.Term
+		rc.storage.ApplySnapshot(*snap)
+	}
+	w, err := wal.Open(rc.waldir, walsnap)
+	if err != nil {
+		log.Fatalf("Open wal failed, Error: %v", err)
+	}
+	_, state, ents, err := w.ReadAll()
+	if err != nil {
+		log.Fatalf("Read wal failed, Error: %v", err)
+	}
+	rc.storage.SetHardState(state)
+	rc.storage.Append(ents)
+	if len(ents) > 0 {
+		rc.lastIndex = ents[len(ents) - 1].Index
+	} 
+	// else  rc.CommitC <- nil
+	
+	rc.wal = w
+	
 	c := &raft.Config{
 		ID:				uint64(rc.id),
 		ElectionTick:	10,
