@@ -1,5 +1,5 @@
 # raft-go
 exercise for raft
 
-#Usage
+# Usage
 `./raft-go --id=1`

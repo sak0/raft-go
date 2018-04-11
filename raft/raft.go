@@ -32,12 +32,16 @@ type raftNode struct {
 	transport   *rafthttp.Transport
 	wal         *wal.WAL
 	
-	snapdir     string
-	waldir      string
+	snapdir          string
+	waldir           string
 	
-	lastIndex   uint64
+	confState        raftpb.ConfState
 	
-	CommitC     chan *string
+	lastIndex        uint64
+	appliedIndex     uint64
+	snapshotIndex    uint64
+	
+	CommitC          chan *string
 }
 func (rc *raftNode) Process(ctx context.Context, m raftpb.Message) error {
 	return rc.node.Step(ctx, m)
@@ -50,6 +54,36 @@ func (rc *raftNode) ServeEndpoint(){
 	url, _ := url.Parse(rc.peers[rc.id - 1])
 	mux := rc.transport.Handler()
 	log.Fatal(http.ListenAndServe(url.Host, mux))
+}
+
+func (rc *raftNode) saveSnap(snap raftpb.Snapshot) error {
+	walSnap := walpb.Snapshot{
+		Index: snap.Metadata.Index,
+		Term:  snap.Metadata.Index,
+	}
+	if err := rc.wal.SaveSnapshot(walSnap); err != nil {
+		return err
+	}
+	if err := rc.snapshotter.SaveSnap(snap); err != nil {
+		return err
+	}
+	
+	return rc.wal.ReleaseLockTo(snap.Metadata.Index)
+}
+
+func (rc *raftNode) publishSnapshot(snap raftpb.Snapshot){
+	if raft.IsEmptySnap(snap) {
+		return
+	}
+	fmt.Printf("publishing snapshot at index %d", rc.snapshotIndex)
+	defer fmt.Printf("finish publishing snapshot at index %d", rc.snapshotIndex)
+	if snap.Metadata.Index <= rc.appliedIndex {
+		log.Fatalf("couldn't publish snapshot index %d <= node applied index %d", snap.Metadata.Index, rc.appliedIndex)
+	}
+	rc.CommitC <- nil
+	rc.confState = snap.Metadata.ConfState
+	rc.snapshotIndex = snap.Metadata.Index
+	rc.appliedIndex = snap.Metadata.Index
 }
 
 func (rc *raftNode) ServeChannels(){
@@ -67,6 +101,14 @@ func (rc *raftNode) ServeChannels(){
 					fmt.Printf("(%d)[%v][%d] %d -> %d\n", 
 					i, msg.Type, msg.Term, msg.From, msg.To)
 				}
+				rc.wal.Save(rd.HardState, rd.Entries)
+				if !raft.IsEmptySnap(rd.Snapshot) {
+					fmt.Printf("+++++++++receive rd.Snapshot %+v\n", rd.Snapshot)
+					rc.saveSnap(rd.Snapshot)
+					rc.storage.ApplySnapshot(rd.Snapshot)
+					rc.publishSnapshot(rd.Snapshot)
+				}
+				
 				rc.storage.Append(rd.Entries)
 				rc.transport.Send(rd.Messages)
 				rc.node.Advance()
