@@ -23,14 +23,14 @@ import (
 )
 
 type raftNode struct {
-	id			int
-	peers       []string
+	id			     int
+	peers            []string
 	
-	node        raft.Node
-	storage     *raft.MemoryStorage
-	snapshotter *raftsnap.Snapshotter
-	transport   *rafthttp.Transport
-	wal         *wal.WAL
+	node             raft.Node
+	storage          *raft.MemoryStorage
+	snapshotter      *raftsnap.Snapshotter
+	transport        *rafthttp.Transport
+	wal              *wal.WAL
 	
 	snapdir          string
 	waldir           string
@@ -41,7 +41,9 @@ type raftNode struct {
 	appliedIndex     uint64
 	snapshotIndex    uint64
 	
-	CommitC          chan *string
+	proposeC         chan string
+	confChangeC      chan raftpb.ConfChange
+	commitC          chan *string
 }
 func (rc *raftNode) Process(ctx context.Context, m raftpb.Message) error {
 	return rc.node.Step(ctx, m)
@@ -54,6 +56,20 @@ func (rc *raftNode) ServeEndpoint(){
 	url, _ := url.Parse(rc.peers[rc.id - 1])
 	mux := rc.transport.Handler()
 	log.Fatal(http.ListenAndServe(url.Host, mux))
+}
+
+func (rc *raftNode) entriesToApply(ents []raftpb.Entry) (nents []raftpb.Entry) {
+	if len(ents) == 0 {
+		return
+	}
+	firstIdx := ents[0].Index
+	if firstIdx > rc.appliedIndex+1 {
+		log.Fatalf("first index of committed entry[%d] should <= progress.appliedIndex[%d] 1", firstIdx, rc.appliedIndex)
+	}
+	if rc.appliedIndex-firstIdx+1 < uint64(len(ents)) {
+		nents = ents[rc.appliedIndex-firstIdx+1:]
+	}
+	return nents
 }
 
 func (rc *raftNode) saveSnap(snap raftpb.Snapshot) error {
@@ -80,7 +96,7 @@ func (rc *raftNode) publishSnapshot(snap raftpb.Snapshot){
 	if snap.Metadata.Index <= rc.appliedIndex {
 		log.Fatalf("couldn't publish snapshot index %d <= node applied index %d", snap.Metadata.Index, rc.appliedIndex)
 	}
-	rc.CommitC <- nil
+	rc.commitC <- nil
 	rc.confState = snap.Metadata.ConfState
 	rc.snapshotIndex = snap.Metadata.Index
 	rc.appliedIndex = snap.Metadata.Index
@@ -93,12 +109,14 @@ func (rc *raftNode) ServeChannels(){
 	for {
 		select {
 			case <-ticker.C:
-				fmt.Printf("node.Tick Status %+v\n", rc.node.Status())
+				//fmt.Printf("node.Tick Status %+v\n", rc.node.Status())
 				rc.node.Tick()
 			case rd := <-rc.node.Ready():
+				nodeStatus := rc.node.Status()
 				fmt.Printf("***receive node ready msg***\n")
 				for i, msg := range rd.Messages {
-					fmt.Printf("(%d)[%v][%d] %d -> %d\n", 
+					fmt.Printf("%v(%d) - (%d)[%v][%d] %d -> %d\n", 
+					nodeStatus.SoftState.RaftState, nodeStatus.SoftState.Lead, 
 					i, msg.Type, msg.Term, msg.From, msg.To)
 				}
 				rc.wal.Save(rd.HardState, rd.Entries)
@@ -122,7 +140,9 @@ func CreateRaftNode(id *int, cluster *string){
 		snapdir: 	    fmt.Sprintf("snap-%d", *id),
 		waldir:         fmt.Sprintf("wal-%d", *id),
 		
-		CommitC:        make(chan *string),
+		commitC:        make(chan *string),
+		proposeC:       make(chan string),
+		confChangeC:    make(chan raftpb.ConfChange),
 	}
 	
 	rc.peers = strings.Split(*cluster, ",")
@@ -169,7 +189,7 @@ func CreateRaftNode(id *int, cluster *string){
 	if len(ents) > 0 {
 		rc.lastIndex = ents[len(ents) - 1].Index
 	} 
-	// else  rc.CommitC <- nil
+	// else  rc.commitC <- nil
 	
 	rc.wal = w
 	
