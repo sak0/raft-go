@@ -44,6 +44,8 @@ type raftNode struct {
 	proposeC         chan string
 	confChangeC      chan raftpb.ConfChange
 	commitC          chan *string
+	errorC           chan error
+	snapshotterReady chan *raftsnap.Snapshotter
 }
 func (rc *raftNode) Process(ctx context.Context, m raftpb.Message) error {
 	return rc.node.Step(ctx, m)
@@ -134,15 +136,19 @@ func (rc *raftNode) ServeChannels(){
 	}
 }
 
-func CreateRaftNode(id *int, cluster *string){
+func CreateRaftNode(id *int, cluster *string, proposeC chan string, 
+	confChangeC chan raftpb.ConfChange)(chan *string, chan error, chan *raftsnap.Snapshotter){
+	errorC := make(chan error)
 	var rc *raftNode = &raftNode{
-		id:          	*id,
-		snapdir: 	    fmt.Sprintf("snap-%d", *id),
-		waldir:         fmt.Sprintf("wal-%d", *id),
+		id:          	  	*id,
+		snapdir: 	      	fmt.Sprintf("snap-%d", *id),
+		waldir:           	fmt.Sprintf("wal-%d", *id),
 		
-		commitC:        make(chan *string),
-		proposeC:       make(chan string),
-		confChangeC:    make(chan raftpb.ConfChange),
+		commitC:          	make(chan *string),
+		proposeC:         	proposeC,
+		confChangeC:      	confChangeC,
+		errorC:           	errorC,
+		snapshotterReady:	make(chan *raftsnap.Snapshotter, 1),
 	}
 	
 	rc.peers = strings.Split(*cluster, ",")
@@ -155,6 +161,7 @@ func CreateRaftNode(id *int, cluster *string){
 		}
 	}
 	rc.snapshotter = raftsnap.New(rc.snapdir)
+	rc.snapshotterReady <- rc.snapshotter
 	
 	oldwal := wal.Exist(rc.waldir)
 	if !oldwal {
@@ -229,4 +236,5 @@ func CreateRaftNode(id *int, cluster *string){
 	if err, ok := <-rc.transport.ErrorC; ok {
 		log.Fatal(err)
 	}
+	return rc.commitC, errorC, rc.snapshotterReady
 }
