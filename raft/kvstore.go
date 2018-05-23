@@ -2,6 +2,7 @@ package raft
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 	"encoding/gob"
 	"log"
@@ -15,8 +16,8 @@ type kvstore struct {
 }
 
 type kv struct{
-	k	string
-	v	string
+	Key	string
+	Val	string
 }
 
 func NewKVStore(proposeC chan<- string)*kvstore{
@@ -38,6 +39,7 @@ func (kvs *kvstore)Lookup(key string)(string, bool){
 }
 
 func (kvs *kvstore)Propose(k string, v string){
+	fmt.Printf("Propose %s = %s.\n", k, v)
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(kv{k, v}); err != nil{
 		log.Fatal(err)

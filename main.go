@@ -23,5 +23,7 @@ func main() {
 	fmt.Printf("create raft node done: %v %v %v\n", commitC, errorC, snapshotterReady)
 	
 	kvs := myraft.NewKVStore(proposeC)
+	fmt.Printf("create kvstore done: %v\n", kvs)
 	myraft.ServeHTTPAPI(kvs, errorC)
+	fmt.Printf("ServeHTTPAPI done: %v\n", kvs)
 }

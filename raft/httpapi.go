@@ -37,7 +37,8 @@ func (h *HttpAPI)ServeHTTP(w http.ResponseWriter, r *http.Request){
 				fmt.Fprintf(w, "can't read body.\n")
 				return
 			}
-			h.store.kvStore[key] = string(rec)
+			//h.store.kvStore[key] = string(rec)
+			h.store.Propose(key, string(rec))
 			w.WriteHeader(http.StatusNoContent)
 			fmt.Fprintf(w, "Update store[%s] = %s", key, rec)
 		default:
