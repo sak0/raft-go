@@ -233,8 +233,8 @@ func CreateRaftNode(id *int, cluster *string, proposeC chan string,
 	go rc.ServeEndpoint()
 	go rc.ServeChannels()
 	
-	if err, ok := <-rc.transport.ErrorC; ok {
+	/*if err, ok := <-rc.transport.ErrorC; ok {
 		log.Fatal(err)
-	}
+	}*/
 	return rc.commitC, errorC, rc.snapshotterReady
 }
