@@ -22,6 +22,6 @@ func main() {
 	commitC, errorC, snapshotterReady := myraft.CreateRaftNode(id, cluster, proposeC, confChangeC)
 	fmt.Printf("create raft node done: %v %v %v\n", commitC, errorC, snapshotterReady)
 	
-	kvs := myraft.NewKVStore()
+	kvs := myraft.NewKVStore(proposeC)
 	myraft.ServeHTTPAPI(kvs, errorC)
 }

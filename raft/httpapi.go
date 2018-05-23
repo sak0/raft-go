@@ -50,7 +50,7 @@ func ServeHTTPAPI(kvs *kvstore, errorC chan error){
 	srv := http.Server{
 		Addr: "0.0.0.0:8888",
 		Handler: &HttpAPI {
-			store: NewKVStore(),
+			store: kvs,
 		},
 	}
 	go func(){
