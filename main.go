@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+
 	
 	"github.com/coreos/etcd/raft/raftpb"
 	myraft "github.com/sak0/raft-go/raft"
@@ -10,6 +11,7 @@ import (
 
 func main() {
 	id := flag.Int("id", 1, "node ID")
+	port := flag.Int("port", 8888, "value of kvstore port")
 	cluster := flag.String("cluster", "http://127.0.0.1:12380,http://127.0.0.1:22380,http://127.0.0.1:32380", 
 		"comma separated cluster peers")
 	flag.Parse()
@@ -24,6 +26,6 @@ func main() {
 	
 	kvs := myraft.NewKVStore(proposeC)
 	fmt.Printf("create kvstore done: %v\n", kvs)
-	myraft.ServeHTTPAPI(kvs, errorC)
-	fmt.Printf("ServeHTTPAPI done: %v\n", kvs)
+	
+	myraft.ServeHTTPAPI(kvs, *port, errorC)
 }

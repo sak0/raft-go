@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
 )
 
 type HttpAPI struct {
@@ -47,9 +48,9 @@ func (h *HttpAPI)ServeHTTP(w http.ResponseWriter, r *http.Request){
 	}
 }
 
-func ServeHTTPAPI(kvs *kvstore, errorC chan error){
+func ServeHTTPAPI(kvs *kvstore, port int, errorC chan error){
 	srv := http.Server{
-		Addr: "0.0.0.0:8888",
+		Addr: "0.0.0.0:" + strconv.Itoa(port),
 		Handler: &HttpAPI {
 			store: kvs,
 		},
