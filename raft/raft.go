@@ -46,6 +46,7 @@ type raftNode struct {
 	commitC          chan *string
 	errorC           chan error
 	snapshotterReady chan *raftsnap.Snapshotter
+	stopc            chan struct{}
 }
 func (rc *raftNode) Process(ctx context.Context, m raftpb.Message) error {
 	return rc.node.Step(ctx, m)
@@ -108,6 +109,35 @@ func (rc *raftNode) ServeChannels(){
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	
+	// send proposals over raft
+	go func() {
+		var confChangeCount uint64 = 0
+
+		for rc.proposeC != nil && rc.confChangeC != nil {
+			select {
+			case prop, ok := <-rc.proposeC:
+				fmt.Printf("<raft.go> Got propose %v\n", prop)
+				if !ok {
+					rc.proposeC = nil
+				} else {
+					// blocks until accepted by raft state machine
+					rc.node.Propose(context.TODO(), []byte(prop))
+				}
+
+			case cc, ok := <-rc.confChangeC:
+				if !ok {
+					rc.confChangeC = nil
+				} else {
+					confChangeCount += 1
+					cc.ID = confChangeCount
+					rc.node.ProposeConfChange(context.TODO(), cc)
+				}
+			}
+		}
+		// client closed channel; shutdown raft if not already
+		close(rc.stopc)
+	}()	
+	
 	for {
 		select {
 			case <-ticker.C:
@@ -149,6 +179,7 @@ func CreateRaftNode(id *int, cluster *string, proposeC chan string,
 		confChangeC:      	confChangeC,
 		errorC:           	errorC,
 		snapshotterReady:	make(chan *raftsnap.Snapshotter, 1),
+		stopc:              make(chan struct{}),
 	}
 	
 	rc.peers = strings.Split(*cluster, ",")
